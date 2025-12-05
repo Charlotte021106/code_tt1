@@ -261,10 +261,11 @@ print("job_pricing_label:", job_pricing_label.shape)
 print("job_apply_logs:", job_apply_logs.shape)
 
 # 如需导入 MySQL / ClickHouse，可按需导出 CSV
-# company_profile.to_csv("company_profile.csv", index=False)
-# company_soft_metrics.to_csv("company_soft_metrics.csv", index=False)
-# company_tier_features.to_csv("company_tier_features.csv", index=False)
-# job_profile.to_csv("job_profile.csv", index=False)
-# job_stats.to_csv("job_stats.csv", index=False)
-# job_pricing_label.to_csv("job_pricing_label.csv", index=False)
-# job_apply_logs.to_csv("job_apply_logs.csv", index=False)
+company_profile.to_csv("company_profile.csv", index=False)
+company_soft_metrics.to_csv("company_soft_metrics.csv", index=False)
+company_tier_features.to_csv("company_tier_features.csv", index=False)
+job_profile.to_csv("job_profile.csv", index=False)
+job_stats.to_csv("job_stats.csv", index=False)
+job_pricing_label.to_csv("job_pricing_label.csv", index=False)
+job_apply_logs.to_csv("job_apply_logs.csv", index=False)
+
