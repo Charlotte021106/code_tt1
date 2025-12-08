@@ -1,0 +1,59 @@
+import matplotlib.pyplot as plt
+import numpy as np
+
+plt.figure(figsize=(12, 8))
+
+# 图 1：企业规模分布（长尾）
+plt.subplot(2, 2, 1)
+plt.hist(company_profile["company_size"], bins=[0,100,200,500,1000,2000,4000,8000])
+plt.yscale("log")   
+plt.xlabel("Company Size (approx.)")
+plt.ylabel("Number of Companies")
+plt.title("Distribution of Company Size (Long Tail)")
+
+# 图 2：岗位薪资 vs 曝光
+# 把岗位和统计表合并
+job_all = job_profile.merge(job_stats, on="job_id", how="left")
+
+# 计算岗位平均薪资（k）
+avg_salary = (job_all["salary_min_k"] + job_all["salary_max_k"]) / 2.0
+
+plt.subplot(2, 2, 2)
+plt.scatter(avg_salary, job_all["impression_cnt"], s=8, alpha=0.6)
+plt.yscale("log")  
+plt.xlabel("Average Salary (k)")
+plt.ylabel("Exposure Count")
+plt.title("Relationship between Salary and Exposure")
+
+# 图 3：国际化 vs 非国际化岗位曝光对比（箱线图）
+# 合并企业是否国际化标记
+job_all2 = (
+    job_profile
+    .merge(company_profile[["company_id", "intl_flag"]], on="company_id", how="left")
+    .merge(job_stats, on="job_id", how="left")
+)
+
+intl_exposure    = job_all2.loc[job_all2["intl_flag"] == 1, "impression_cnt"]
+nonintl_exposure = job_all2.loc[job_all2["intl_flag"] == 0, "impression_cnt"]
+
+plt.subplot(2, 2, 3)
+plt.boxplot(
+    [nonintl_exposure, intl_exposure],
+    labels=["Non-Intl Jobs", "Intl Jobs"],
+    showfliers=False  # 去掉极端点
+)
+plt.yscale("log")
+plt.ylabel("Exposure Count")
+plt.title("Exposure Comparison: Intl vs Non-Intl Jobs")
+
+# 图 4：定价标签分布
+plt.subplot(2, 2, 4)
+price = job_pricing_label["price_label"].clip(upper=600)
+
+plt.hist(price, bins=30)
+plt.xlabel("Price Label")
+plt.ylabel("Number of Jobs")
+plt.title("Distribution of Recommended Price Label")
+
+plt.tight_layout()
+plt.show()
