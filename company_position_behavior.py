@@ -14,29 +14,7 @@ funding_stages = ["未融资", "天使轮", "A轮", "B轮", "C轮及以上", "�
 cities = ["北京", "上海", "深圳", "杭州", "新加坡", "广州"]
 job_functions = ["算法工程师", "数据分析", "后端开发", "前端开发", "产品经理", "运营"]
 
-# ======================
-# 1. 企业侧数据
-# ======================
-
-company_ids = np.arange(1, n_companies + 1)
-
-# 企业基础画像
-company_profile = pd.DataFrame({
-    "company_id": company_ids,
-    "industry": np.random.choice(industries, size=n_companies),
-    "company_size": np.random.choice([50, 100, 200, 500, 1000, 3000], size=n_companies),
-    "funding_stage": np.random.choice(funding_stages, size=n_companies),
-    "brand_level": np.random.randint(1, 6, size=n_companies),
-    "salary_level": np.random.randint(1, 6, size=n_companies),
-    "intl_flag": np.random.binomial(1, 0.3, size=n_companies),
-    "top10_talent_ratio": np.round(np.random.uniform(0.05, 0.5, size=n_companies), 3),
-    "avg_apply_cnt": np.random.randint(50, 300, size=n_companies),
-    "hire_rate": np.round(np.random.uniform(0.05, 0.3, size=n_companies), 3)
-})
-
-# 企业软指标
-company_soft_metrics = pd.DataFrame({
-    "company_id": company_ids,
+"company_id": company_ids,
     "overall_rating": np.round(np.random.uniform(3.0, 5.0, size=n_companies), 2),
     "work_life_balance_score": np.round(np.random.uniform(2.5, 5.0, size=n_companies), 2),
     "salary_competitiveness": np.round(np.random.uniform(2.5, 5.0, size=n_companies), 2),
@@ -92,72 +70,6 @@ def assign_tier(x: float) -> str:
 
 company_tier_features["enterprise_tier"] = tier_score.apply(assign_tier)
 
-# ======================
-# 2. 岗位侧数据
-# ======================
-
-job_rows = []
-job_id = 1
-
-# 为每个企业生成若干岗位
-for cid in company_ids:
-    n_jobs = np.random.randint(jobs_per_company_min, jobs_per_company_max + 1)
-    for _ in range(n_jobs):
-        func = np.random.choice(job_functions)
-        # 热门岗位标记
-        hot_function = 1 if func in ["算法工程师", "数据分析", "后端开发"] else 0
-        level = np.random.choice(["初级", "中级", "高级"])
-        base = np.random.randint(8, 40)
-        salary_min_k = base
-        salary_max_k = base + np.random.randint(2, 15)
-
-        job_rows.append({
-            "job_id": job_id,
-            "company_id": cid,
-            "job_type": "全职",
-            "job_level": level,
-            "job_function": func,
-            "city": np.random.choice(cities),
-            "salary_min_k": salary_min_k,
-            "salary_max_k": salary_max_k,
-            "target_top10": np.random.binomial(1, 0.4),
-            "online_days": np.random.randint(7, 60),
-            "urgency": np.random.choice([1, 2, 3]),
-            "hot_function": hot_function
-        })
-        job_id += 1
-
-job_profile = pd.DataFrame(job_rows)
-
-# 合并企业信息，便于后续生成曝光 / 投递
-job_merged = (
-    job_profile
-    .merge(company_profile, on="company_id", how="left")
-    .merge(company_tier_features, on="company_id", how="left")
-)
-
-# 2.2 曝光 / 投递 / 录用 
-
-# 吸引力得分 attract_score
-eps = np.random.normal(0, 0.8, size=len(job_merged))
-attract_score = (
-    0.8 * job_merged["brand_level"]
-    + 0.7 * job_merged["salary_level"]
-    + 0.5 * job_merged["intl_flag"]
-    + 0.9 * job_merged["target_top10"]
-    + 0.6 * job_merged["hot_function"]
-    + eps
-)
-
-# 查看概率 p_view
-p_view = 1 / (1 + np.exp(-attract_score))
-
-# 曝光量：Poisson 分布
-lambda_exposure = base_lambda_exposure * p_view
-lambda_exposure = lambda_exposure.clip(20, None)
-impressions = np.random.poisson(lam=lambda_exposure)
-
-# 查看次数：在曝光基础上按 p_view 抽样
 views = np.random.binomial(impressions, p_view.clip(0.05, 0.95))
 
 # 投递次数：查看后的投递概率设为 0.3 * p_view
@@ -176,17 +88,30 @@ job_stats = pd.DataFrame({
     "hire_cnt": hires
 })
 
-# 2.3 定价标签
+# ---------- 2.3 定价标签 ----------
 
 top10_ratio = job_merged["top10_talent_ratio"].fillna(0.1).values
 expected_applies = applies * top10_ratio
+
 v = 100
 expected_value = v * expected_applies
 ROI_target = 3.0
 
+# 基于 ROI 的基础定价
+P_base = expected_value / ROI_target
+
+# 使用 log1p 对价格做温和压缩，让低价聚集、高价拖尾更自然
+P_scaled = np.log1p(P_base)
+P_norm = P_scaled / (np.percentile(P_scaled, 95) + 1e-6)
+
+# 映射到目标市场价格带（主体 250–350，拖尾到 550+）
+p_min, p_max = 250, 380
+price_core = p_min + (p_max - p_min) * (P_norm ** 1.2)  
+
 brand_level = job_merged["brand_level"].values
-price_label = expected_value / ROI_target * (0.8 + 0.1 * brand_level)
-price_label = np.clip(price_label, 100, 5000)
+brand_factor = 1.0 + 0.05 * (brand_level - 3) 
+price_label = price_core * brand_factor
+price_label = np.clip(price_label, 120, 650)
 
 job_pricing_label = pd.DataFrame({
     "job_id": job_profile["job_id"],
@@ -268,4 +193,3 @@ job_profile.to_csv("job_profile.csv", index=False)
 job_stats.to_csv("job_stats.csv", index=False)
 job_pricing_label.to_csv("job_pricing_label.csv", index=False)
 job_apply_logs.to_csv("job_apply_logs.csv", index=False)
-
