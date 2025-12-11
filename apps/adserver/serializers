@@ -1,0 +1,86 @@
+from django.db.models import Sum
+from rest_framework import serializers
+
+from adsearch.serializers import AdUnitHobbySerializer, AdUnitDistrictSerializer #两个序列化器
+from .models import *
+
+
+class AdPlanSerializer(serializers.ModelSerializer): # 根据AdPlan模型自动生成字段对映
+    user = serializers.SerializerMethodField() #user不直接用模型里的字段
+
+    class Meta:
+        model = AdPlan
+        fields = '__all__' #将AdPlan里所有字段暴露给接口
+        read_only_fields = ('user', 'status') #前端不可以改user和status两个字段
+
+    def get_user(self, obj):#obj是AdPlan实例，调取计划里的user的姓名
+        return obj.user.first_name or "未知"
+
+    def update(self, instance, validated_data):
+        """
+        限制只允许更新 'name' 和 'budget' 字段
+        """
+        # 获取请求中的更新数据
+        name = validated_data.get('name', instance.name)
+        budget = validated_data.get('budget', instance.budget)
+
+        # 更新广告计划实例的指定字段
+        instance.name = name
+        instance.budget = budget
+        instance.save()
+
+        return instance
+
+
+class AdUnitSerializer(serializers.ModelSerializer):
+    # 显示广告计划的名称（只读字段）
+    plan_name = serializers.CharField(source='plan.name', read_only=True)
+    hobbies = AdUnitHobbySerializer(many=True, required=False)
+    districts = AdUnitDistrictSerializer(many=True, required=False)
+
+    class Meta:
+        model = AdUnit
+        fields = ['unit_id', 'unit_name', 'unit_status', 'position_type', 'budget_fee', 'plan_name', 'create_time',
+                  'hobbies', 'districts']
+        read_only_fields = ['unit_status', 'plan_name']  # 设置只读字段
+
+    def validate_budget_fee(self, value):
+        """
+        校验广告单元的预算不能为 0 且不能超过广告计划剩余预算
+        """
+        # 校验预算不能为 0
+        if value <= 0:
+            raise serializers.ValidationError("广告单元的预算必须大于 0 元。")
+        plan_id = self.initial_data.get('plan_id')  # 从初始数据中获取 plan_id
+        if plan_id:
+            plan = AdPlan.objects.get(id=plan_id)  # 查询 plan 对象
+            # 获取该广告计划下所有广告单元的总预算
+            total_used_budget = AdUnit.objects.filter(plan=plan).aggregate(Sum('budget_fee'))['budget_fee__sum'] or 0
+            remaining_budget = plan.budget - total_used_budget  # 计算剩余预算
+
+            if value > remaining_budget:  # 如果当前预算超过剩余预算
+                raise serializers.ValidationError(
+                    f"广告单元的预算不能超过该广告计划的剩余预算 ({remaining_budget} 元)。")
+        return value
+
+    def create(self, validated_data):
+        # 在创建广告单元时，默认状态为“未启用”
+        validated_data['unit_status'] = 0  # 默认设置为未启用
+        return super().create(validated_data) #调用父类create真正创建记录
+
+
+class AdCreativeSerializer(serializers.ModelSerializer):
+    user_name = serializers.CharField(source='user.first_name', read_only=True)
+    name = serializers.CharField(help_text="创意名")
+    url = serializers.URLField(required=False)  # 允许 url 字段为空
+    user = serializers.PrimaryKeyRelatedField(read_only=True)  # 标记 user 为只读
+
+    class Meta:
+        model = AdCreative
+        fields = '__all__'
+
+
+class AdUnitCreativeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AdUnitCreative
+        fields = '__all__'
