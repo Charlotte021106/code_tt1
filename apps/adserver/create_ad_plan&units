@@ -1,0 +1,198 @@
+# -- 1. create plan -- 
+import time
+
+from django.core.management.base import BaseCommand
+from faker import Faker
+from django.contrib.auth.models import User
+from adserver.models import AdPlan
+import random
+
+
+class Command(BaseCommand):
+    help = 'Generate test data for AdPlan'
+
+    def handle(self, *args, **kwargs):
+        fake = Faker('zh-CN') #造中文名、中文环境下的假数据
+
+        users = []
+        for _ in range(10):  # 生成10个用户，可以根据需要调整数量
+            user = User.objects.create_user(
+                username=fake.user_name(),
+                email=fake.email(),
+                password='qwe123',
+                first_name=fake.name()
+            )
+            users.append(user)
+        plan_names = [
+            "双11爆单冲刺计划",
+            "暑期清凉季营销",
+            "开学季促销活动",
+            "春节团圆红包计划",
+            "618年中大促",
+            "年末感恩回馈",
+            "新品上市推广",
+            "会员专属福利",
+            "品牌形象升级",
+            "本地商家引流",
+            "双12年终盛典",
+            "99划算节流量收割",
+            "超级品牌日全域曝光",
+            "国庆黄金周抢客行动",
+            "情人节甜蜜经济计划",
+            "3.8女神节专属战役",
+            "中秋团圆季品效合一",
+            "Z世代破圈渗透计划",
+            "宝妈社群唤醒行动",
+            "银发族关怀营销计划",
+            "新车主精准转化战役",
+            "爆款单品打榜计划",
+            "清库存闪电促销",
+            "高端系列心智占领",
+            "同城夜市狂欢节",
+            "社区团购闪电战",
+            "地标商圈打卡引流",
+            "沉睡用户激活计划",
+            "SVIP尊享裂变",
+            "积分兑换促活行动",
+            "品牌年轻化焕新行动",
+            "ESG社会责任传播",
+            "品牌跨界联名计划",
+            "世界杯主题营销",
+            "明星同款种草计划",
+            "网红打卡地标联动",
+            "AR试妆体验推广",
+            "智能客服转化优化",
+            "LBS周边辐射计划",
+            "黑色星期五海购节",
+            "直播带货巅峰战",
+            "校园迎新特惠季",
+            "企业采购节专项",
+            "健康养生季推广",
+            "宠物经济生态计划",
+            "智能家居体验官",
+            "跨境购物流量池",
+            "老客复购唤醒计划",
+            "新客首单裂变计划",
+            "短视频挑战赛引爆"
+        ]
+        for _ in range(50):  # 生成50个广告计划
+            user = random.choice(users)  # 随机选择一个用户
+            name = random.choice(plan_names) #随机选一个计划名
+            budget = random.randint(10000, 100000) #预算随机
+            status = random.choice(['active', 'inactive'])  # 随机状态
+
+            AdPlan.objects.create(
+                user=user,
+                name=name,
+                budget=budget,
+                status=status
+            )
+            time.sleep(0.5) #创建一个间隔0.5秒
+        self.stdout.write(self.style.SUCCESS('Successfully generated test data!'))
+
+# -- 2.create units -- 
+import time
+
+from django.core.management.base import BaseCommand
+from django.contrib.auth.models import User
+from adserver.models import AdPlan, AdUnit, AdUnitDistrict, AdUnitHobby
+import random
+
+
+class Command(BaseCommand):
+    help = 'Generate test data for AdUnit, AdUnitDistrict, AdUnitHobby'
+
+    def handle(self, *args, **kwargs): #造兴趣标签
+        hobbies = [
+            '健身运动', '科技数码', '母婴育儿', '美妆护肤', '股票投资',
+            '在线教育', '出境旅游', '烘焙料理', '新能源汽车', '中医养生',
+            '宠物饲养', '电竞游戏', '摄影摄像', '家居装修', '奢侈品',
+            '短视频创作', '户外探险', '二手交易', '区块链', '动漫文化'
+        ]
+        for tag in hobbies:
+            AdUnitHobby.objects.get_or_create(hobby_tag=tag)
+              
+        #造地域标签
+        province_cities = {
+            '北京': ['朝阳区', '海淀区', '东城区', '西城区', '丰台区'],
+            '上海': ['浦东新区', '徐汇区', '静安区', '黄浦区', '长宁区'],
+            '天津': ['和平区', '河西区', '南开区', '河北区', '滨海新区'],
+            '重庆': ['渝中区', '江北区', '南岸区', '沙坪坝区', '九龙坡区'],
+            '江苏': ['南京', '苏州', '无锡', '常州', '徐州', '扬州'],
+            '浙江': ['杭州', '宁波', '温州', '绍兴', '嘉兴', '金华'],
+            '广东': ['广州', '深圳', '佛山', '东莞', '中山', '珠海']
+        }
+        for province, areas in province_cities.items():
+            for area in areas:
+                AdUnitDistrict.objects.get_or_create(
+                    province=province,
+                    city=area if province in ['北京', '上海', '天津', '重庆'] else ''
+                ) #省份+城市（普通城市（如广东）city为空）
+
+        users = User.objects.all() #拿到所有plan里生成的user和adplan
+        ad_plans = AdPlan.objects.all()
+        all_hobbies = list(AdUnitHobby.objects.all())
+        all_districts = list(AdUnitDistrict.objects.all())
+
+        if not users:
+            self.stdout.write(self.style.ERROR('No users found in the database. Please create users first.'))
+            return
+
+        if not ad_plans:
+            self.stdout.write(self.style.ERROR('No AdPlans found in the database. Please generate AdPlans first.'))
+            return
+        unit_names = [
+            "首页信息流广告位",
+            "详情页底部通栏广告",
+            "APP启动页全屏广告",
+            "搜索结果列表广告位",
+            "视频前贴片15秒广告",
+            "个人中心悬浮按钮广告",
+            "商品分类页轮播广告",
+            "支付完成页弹窗广告",
+            "消息中心信息流广告",
+            "购物车推荐广告位",
+            "会员专享横幅广告",
+            "游戏试玩互动广告",
+            "短视频信息流第三坑位",
+            "直播间礼物挂件广告",
+            "电子书翻页插页广告",
+            "音乐播放器音视频广告",
+            "地图导航POI标注广告",
+            "天气页面底部横幅广告",
+            "新闻详情页信息流广告",
+            "相机AR特效植入广告",
+            "输入法皮肤推荐广告",
+            "WiFi连接成功页广告",
+            "抽奖活动浮层广告位",
+            "智能推荐信息流广告",
+            "桌面小部件动态广告"
+        ]
+        for _ in range(50):  # 生成50个广告单元
+            ad_plan = random.choice(ad_plans)
+            unit_name = random.choice(unit_names)
+            position_type = random.choice([0, 1, 2, 3, 4]) #adunit显示过位置类型
+            unit_status = random.choice([0, 1])
+            budget_fee = random.randint(100, 10000)
+
+            ad_unit = AdUnit.objects.create(
+                plan=ad_plan,
+                unit_name=unit_name,
+                unit_status=unit_status,
+                position_type=position_type,
+                budget_fee=budget_fee
+            )
+            ad_unit.hobbies.set(random.sample(all_hobbies, k=random.randint(1, 3))) #随机选1-3个兴趣标签
+            selected_districts = []
+            for _ in range(random.randint(2,5)):
+                province = random.choice(list(province_cities.keys())) #随机一个省份
+                area = random.choice(province_cities[province]) #随机一个区域
+                district = AdUnitDistrict.objects.get(
+                    province=province,
+                    city=area if province in ['北京','上海','天津','重庆'] else '',
+                ) #查找已经存在的省/省+区的格式，再把district对象挂到adunit上
+                selected_districts.append(district)
+            ad_unit.districts.set(list(set(selected_districts))) #绑定到单元上
+            time.sleep(0.5)
+        self.stdout.write(
+            self.style.SUCCESS('Successfully generated test data for AdUnit, AdUnitDistrict, AdUnitHobby!'))
