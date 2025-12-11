@@ -1,0 +1,122 @@
+from django.contrib.auth.models import User # Django自带的用户表（账号密码、用户名等）
+from django.db import models 
+
+# 共含6张数据库表
+# 推广计划表（推广计划/活动）
+class AdPlan(models.Model):
+    user = models.ForeignKey(User, related_name='ad_plans', on_delete=models.CASCADE)  # 关联用户创建/拥有这个计划
+    # 用户被删除，所有该用户创建的广告计划也会被删除。
+    name = models.CharField(max_length=255) #计划名称
+    budget = models.DecimalField(max_digits=10, decimal_places=2) #计划预算-最多十位数字+小数两位
+    status = models.CharField(max_length=50, choices=[('active', 'Active'), ('inactive', 'Inactive')]) #计划状态
+    create_time = models.DateTimeField(auto_now_add=True)  # 创建时间
+    update_time = models.DateTimeField(auto_now=True)  # 修改时间
+
+    # 控制在后台/admin/或打印对象时显示计划名称
+    def __str__(self):
+        return self.name
+
+#兴趣标签表
+class AdUnitHobby(models.Model): #兴趣标签字典表：健身运动/美妆护肤/短视频制作...
+    hobby_tag = models.CharField(max_length=30)
+
+    #修改Hobby表后台管理界面显示的中文名字
+    class Meta: 
+        verbose_name = '推广单元兴趣标签' 
+        verbose_name_plural = '推广单元兴趣标签'
+
+    def __str__(self):
+        return self.hobby_tag
+
+#地域标签表
+class AdUnitDistrict(models.Model): #省+城市
+    province = models.CharField(max_length=30)
+    city = models.CharField(max_length=30)
+
+    class Meta:
+        verbose_name = '推广单元地域标签'
+        verbose_name_plural = '推广单元地域标签'
+
+    def __str__(self):
+        return f'{self.province} - {self.city}'
+
+
+# 广告单元表
+class AdUnit(models.Model):
+    #广告位类型
+    POSITION_TYPE_CHOICES = [
+        (0, '开屏'),
+        (1, '贴片'),
+        (2, '中贴'),
+        (3, '暂停贴'),
+        (4, '后贴')
+    ]
+
+    UNIT_STATUS_CHOICES = [
+        (0, '未启用'),
+        (1, '启用')
+    ]
+
+    unit_id = models.BigAutoField(primary_key=True)  # 主键ID
+    plan = models.ForeignKey(AdPlan, related_name='ad_units', on_delete=models.CASCADE)  # 关联广告计划
+    unit_name = models.CharField(max_length=48)  # 推广单元名称 e.g.北京 + 一线城市女装兴趣包
+    unit_status = models.SmallIntegerField(choices=UNIT_STATUS_CHOICES, default=0)  # 推广单元状态
+    position_type = models.SmallIntegerField(choices=POSITION_TYPE_CHOICES, default=0)  # 广告位类型
+    budget_fee = models.DecimalField(max_digits=18, decimal_places=4)  # 预算
+    create_time = models.DateTimeField(auto_now_add=True)  # 创建时间
+    update_time = models.DateTimeField(auto_now=True)  # 修改时间
+
+    # 多对多关系：单元对应的整个兴趣集合 + 整个地域集合
+    hobbies = models.ManyToManyField(AdUnitHobby, related_name='ad_units', blank=True)  # 多对多兴趣标签
+    districts = models.ManyToManyField(AdUnitDistrict, related_name='ad_units', blank=True)  # 多对多地域标签
+
+    def __str__(self):
+        return self.unit_name
+
+
+# 创意表
+class AdCreative(models.Model):
+    CREATIVE_TYPE_CHOICES = [
+        (0, '图片'),
+        (1, '视频')
+    ]
+
+    MATERIAL_TYPE_CHOICES = [
+        (0, 'BMP'),
+        (1, 'JPG'),
+        (2, 'PNG'),
+        (3, 'MP4'),
+        (4, 'AVI')
+    ]
+
+    creative_id = models.BigAutoField(primary_key=True)  # 主键ID
+    name = models.CharField(max_length=48)  # 创意名称
+    creative_type = models.SmallIntegerField(choices=CREATIVE_TYPE_CHOICES, default=0)  # 创意类型（图片/视频）
+    material_type = models.SmallIntegerField(choices=MATERIAL_TYPE_CHOICES, default=0)  # 物料类型（BMP, JPG等）
+    height = models.IntegerField(default=0)  # 高度
+    width = models.IntegerField(default=0)  # 宽度
+    size = models.BigIntegerField(default=0)  # 物料大小,单位B
+    duration = models.IntegerField(default=0)  # 持续时长（仅视频使用）
+    audit_status = models.SmallIntegerField(default=0)  # 审核状态
+    user = models.ForeignKey(User, related_name='ad_creatives', on_delete=models.CASCADE)  # 创建者用户
+    url = models.URLField(max_length=256)  # 物料地址
+    create_time = models.DateTimeField(auto_now_add=True)  # 创建时间
+    update_time = models.DateTimeField(auto_now=True)  # 修改时间
+
+    def __str__(self):
+        return self.name
+
+
+# 多对多，推广单元表和创意表
+class AdUnitCreative(models.Model):
+    ad_unit = models.ForeignKey(AdUnit, related_name='ad_creatives', on_delete=models.CASCADE)  # 关联广告单元
+    ad_creative = models.ForeignKey(AdCreative, related_name='ad_units', on_delete=models.CASCADE)  # 关联广告创意
+    create_time = models.DateTimeField(auto_now_add=True)  # 创建时间
+    update_time = models.DateTimeField(auto_now=True)  # 更新时间
+
+    class Meta:
+        unique_together = ('ad_unit', 'ad_creative')  # 保证一个广告单元和创意的组合是唯一的
+
+    def __str__(self):
+        return f'{self.ad_unit.unit_name} - {self.ad_creative.name}'
+
