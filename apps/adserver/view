@@ -1,0 +1,352 @@
+from django.db import transaction
+from rest_framework import viewsets, status # DRF提供接口模板
+from rest_framework.decorators import action
+from rest_framework.response import Response
+
+from utils.filters import MyPageNumberPagination, AdPlanFilter, AdUnitFilter, AdCreativeFilter
+from utils.permissions import UserLoginPermissions, AdministratorsPermission
+
+from .serializers import *
+from celery_tasks.fdfs.tasks import remove_fdfs_resources
+from utils.tools import ThreadImgs
+
+
+class AdPlanViewSet(viewsets.ModelViewSet):
+    queryset = AdPlan.objects.all() # 继承modelviewset
+    serializer_class = AdPlanSerializer
+    permission_classes = [UserLoginPermissions] #必须登录
+    pagination_class = MyPageNumberPagination
+    filterset_class = AdPlanFilter
+    search_fields = ['name']
+
+    def get_queryset(self):
+        """
+        如果是管理员，返回所有广告计划；否则，只返回当前用户的广告计划。
+        """
+        if self.request.user.is_superuser:
+            return AdPlan.objects.all()  # 管理员查看所有广告计划
+        return AdPlan.objects.filter(user=self.request.user)  # 普通用户查看自己的广告计划
+
+    def perform_create(self, serializer):
+        # 自动将当前用户与广告计划关联
+        serializer.save(user=self.request.user, status='inactive')
+
+    # 添加激活广告计划的 API
+    @action(detail=True, methods=['post'], permission_classes=[AdministratorsPermission])
+    def activate(self, request, pk=None):
+        try:
+            ad_plan = self.get_object()  # 获取当前广告计划
+            if ad_plan.status == 'inactive':
+                ad_plan.status = 'active'  # 激活广告计划
+                ad_plan.save()  # 保存修改
+                return Response({"message": "广告计划已激活"})
+            else:
+                return Response({"message": "广告计划已经是激活状态"}, status=400)
+        except AdPlan.DoesNotExist:
+            return Response({"message": "广告计划未找到"}, status=404)
+
+    @action(detail=True, methods=['post'], permission_classes=[AdministratorsPermission])
+    def deactivate(self, request, pk=None):
+        try:
+            ad_plan = self.get_object()  # 获取当前广告计划
+            if ad_plan.status == 'active':
+                ad_plan.status = 'inactive'  # 停用广告计划
+                ad_plan.save()  # 保存修改
+                return Response({"message": "广告计划已停用"})
+            else:
+                return Response({"message": "广告计划已经是未激活状态"}, status=400)
+        except AdPlan.DoesNotExist:
+            return Response({"message": "广告计划未找到"}, status=404)
+
+ class AdUnitViewSet(viewsets.ModelViewSet): 
+    queryset = AdUnit.objects.all()
+    serializer_class = AdUnitSerializer
+    permission_classes = [UserLoginPermissions]
+    pagination_class = MyPageNumberPagination
+    filterset_class = AdUnitFilter
+    search_fields = ['unit_name']
+
+    def perform_create(self, serializer):
+        plan_id = self.request.data.get('plan_id')
+
+        # 检查 plan_id 是否存在
+        if not plan_id:
+            raise serializers.ValidationError({"message": "广告计划ID不能为空"})
+        try:
+            # 获取对应的广告计划
+            plan = AdPlan.objects.get(id=plan_id)
+        except AdPlan.DoesNotExist:
+            raise serializers.ValidationError({"message": "广告计划未找到"})
+        except ValueError:
+            raise serializers.ValidationError({"message": "广告计划ID无效"})
+
+        # 将广告单元与广告计划绑定
+        serializer.save(plan=plan)
+
+    @action(detail=True, methods=['post'], permission_classes=[AdministratorsPermission])
+    def enable(self, request, pk=None):
+        """
+        启用广告单元
+        """
+        try:
+            ad_unit = self.get_object()  # 获取当前广告单元
+            if ad_unit.unit_status == 0:  # 如果当前状态是未启用
+                ad_unit.unit_status = 1  # 启用广告单元
+                ad_unit.save()  # 保存更改
+                return Response({"message": "广告单元已启用"})
+            else:
+                return Response({"message": "广告单元已经是启用状态"}, status=400)
+        except AdUnit.DoesNotExist:
+            return Response({"message": "广告单元未找到"}, status=404)
+
+    @action(detail=True, methods=['post'], permission_classes=[AdministratorsPermission])
+    def disable(self, request, pk=None):
+        """
+        禁用广告单元
+        """
+        try:
+            ad_unit = self.get_object()  # 获取当前广告单元
+            if ad_unit.unit_status == 1:  # 如果当前状态是启用
+                ad_unit.unit_status = 0  # 禁用广告单元
+                ad_unit.save()  # 保存更改
+                return Response({"message": "广告单元已禁用"})
+            else:
+                return Response({"message": "广告单元已经是禁用状态"}, status=400)
+        except AdUnit.DoesNotExist:
+            return Response({"message": "广告单元未找到"}, status=404)
+        # 根据广告计划ID查询广告单元
+
+    @action(detail=False, methods=['get'], permission_classes=[UserLoginPermissions],
+            url_path='by_ad_plan/(?P<ad_plan_id>\d+)')
+    def by_ad_plan(self, request, ad_plan_id=None):
+        """
+        根据广告计划ID查询广告单元
+        """
+        if not ad_plan_id:
+            return Response({"message": "广告计划ID不能为空"}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            # 获取对应广告计划
+            ad_plan = AdPlan.objects.get(id=ad_plan_id)
+            # 根据广告计划ID过滤广告单元
+            ad_units = AdUnit.objects.filter(plan=ad_plan)
+            serializer = AdUnitSerializer(ad_units, many=True)
+
+            return Response(serializer.data)
+
+        except AdPlan.DoesNotExist:
+            return Response({"message": "广告计划未找到"}, status=status.HTTP_404_NOT_FOUND)
+
+    def update(self, request, *args, **kwargs):
+        instance = self.get_object()  # 获取要更新的实例
+        serializer = self.get_serializer(instance, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)  # 验证数据
+
+        # 提取多对多关系的数据
+        hobbies_data = serializer.validated_data.pop('hobbies', [])
+        districts_data = serializer.validated_data.pop('districts', [])
+
+        # 使用验证后的数据更新实例
+        instance = serializer.save()
+
+        # 处理多对多关系（hobbies）
+        instance.hobbies.clear()  # 清除旧的关系
+        for hobby_data in hobbies_data: #存在即复用和，不存在就create
+            hobby, _ = AdUnitHobby.objects.get_or_create(**hobby_data)
+            instance.hobbies.add(hobby)
+
+        # 处理多对多关系（districts）
+        instance.districts.clear()
+        for district_data in districts_data:
+            district, _ = AdUnitDistrict.objects.get_or_create(**district_data)
+            instance.districts.add(district)
+
+        return Response(serializer.data)
+        #前端可以直接发一堆兴趣/地域JSON，后端负责：校验 + 找/建标签 + 维护多对多关系
+
+
+class AdCreativeViewSet(viewsets.ModelViewSet):
+    queryset = AdCreative.objects.all()
+    serializer_class = AdCreativeSerializer
+    permission_classes = [UserLoginPermissions]
+    pagination_class = MyPageNumberPagination
+    filterset_class = AdCreativeFilter
+    search_fields = ['name']
+    threadImgs = ThreadImgs()
+
+    # 根据广告单元ID查询创意
+    @action(detail=False, methods=['get'], permission_classes=[UserLoginPermissions],
+            url_path='by_ad_unit/(?P<ad_unit_id>\d+)')
+    def by_ad_unit(self, request, ad_unit_id=None):
+        """
+        根据广告单元ID查询绑定的创意
+        """
+        if not ad_unit_id:
+            return Response({"message": "广告单元ID不能为空"}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            ad_unit = AdUnit.objects.get(id=ad_unit_id)
+            ad_creatives = ad_unit.ad_creatives.all()  # 获取与该广告单元相关的创意
+            serializer = AdCreativeSerializer(ad_creatives, many=True)
+            return Response(serializer.data)
+        except AdUnit.DoesNotExist:
+            return Response({"message": "广告单元未找到"}, status=status.HTTP_404_NOT_FOUND)
+
+    # 更新广告创意
+    @action(['put'], detail=False, permission_classes=[UserLoginPermissions])
+    def update_ad_creative(self, request, *args, **kwargs):
+        # 获取广告创意ID
+        ad_creative_id = request.data.get('id')
+        if not ad_creative_id:
+            return Response({"message": "创意ID不能为空"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 查找广告创意
+        try:
+            ad_creative = AdCreative.objects.get(id=ad_creative_id, user_id=request.user.id)
+        except AdCreative.DoesNotExist:
+            return Response({"message": "创意未找到"}, status=status.HTTP_404_NOT_FOUND)
+
+        # 序列化器校验数据
+        serializer = AdCreativeSerializer(ad_creative, data=request.data,
+                                          partial=True)  # partial=True for partial updates
+        if not serializer.is_valid():
+            return Response({"message": "数据不合法", "errors": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 处理文件上传
+        if len(request.FILES.getlist('file')) > 0:
+            self.threadImgs.circulate_add_file(request.FILES.getlist('file'))
+
+        # 使用事务确保数据一致性
+        with transaction.atomic():
+            save_point = transaction.savepoint()
+            try:
+                # 更新广告创意的字段
+                ad_creative = serializer.save()
+
+                # 如果上传了新文件，更新创意文件路径
+                if self.threadImgs.image_list:
+                    ad_creative.url = self.threadImgs.image_list[0]
+                    ad_creative.save()
+
+                # 删除旧文件（如果有）
+                if len(request.FILES.getlist('file')) > 0:
+                    remove_fdfs_resources.delay(ad_creative.url)  # 异步删除旧文件
+
+                # 清空临时文件列表
+                self.threadImgs.clear()
+
+            except Exception as e:
+                transaction.savepoint_rollback(save_point)
+                # 删除新上传的文件（如果出错）
+                if len(request.FILES.getlist('file')) > 0:
+                    remove_fdfs_resources.delay(self.threadImgs.image_list[0])
+                return Response({"message": "创意更新失败"}, status=status.HTTP_400_BAD_REQUEST)
+            else:
+                transaction.savepoint_commit(save_point)
+
+        return Response({
+            "message": "创意更新成功",
+            "url": ad_creative.url
+        })
+
+    # 创建新的广告创意
+    @action(['post'], detail=False, permission_classes=[UserLoginPermissions])
+    def create_ad_creative(self, request, *args, **kwargs):
+        # 序列化器校验数据
+        serializer = AdCreativeSerializer(data=request.data)
+        if serializer.is_valid(raise_exception=True):
+            # 创建新的广告创意
+            ad_creative = serializer.save(user_id=request.user.id)
+            # 处理文件上传
+            if len(request.FILES.getlist('file')) > 0:
+                print(request.FILES.getlist('file'))
+                self.threadImgs.circulate_add_file(request.FILES.getlist('file'))
+                ad_creative.url = self.threadImgs.image_list[0]
+                print(ad_creative.url)
+                ad_creative.save()
+
+            # 清空临时文件列表
+            self.threadImgs.clear()
+
+            return Response({
+                "message": "创意创建成功",
+                "url": ad_creative.url,
+                "creative_id": ad_creative.creative_id
+            })
+        else:
+            return Response({
+                "message": "创意数据不合法",
+                "errors": serializer.errors
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+
+class AdUnitCreativeViewSet(viewsets.ModelViewSet):
+    queryset = AdUnitCreative.objects.all()
+    serializer_class = AdUnitCreativeSerializer
+    permission_classes = [UserLoginPermissions]
+
+    # 为广告单元绑定创意
+    @action(detail=False, methods=['post'], permission_classes=[UserLoginPermissions], url_path='add_creative')
+    def add_creative(self, request):
+        ad_unit_id = request.data.get('ad_unit_id')
+        creative_id = request.data.get('creative_id')
+
+        if not ad_unit_id or not creative_id:
+            return Response({"message": "广告单元ID和创意ID不能为空"}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            ad_unit = AdUnit.objects.get(unit_id=ad_unit_id)
+            ad_creative = AdCreative.objects.get(creative_id=creative_id)
+
+            # 检查该广告单元和创意是否已经绑定
+            if AdUnitCreative.objects.filter(ad_unit=ad_unit, ad_creative=ad_creative).exists():
+                return Response({"message": "广告单元和创意已经绑定"}, status=status.HTTP_400_BAD_REQUEST)
+
+            # 创建绑定关系
+            AdUnitCreative.objects.create(ad_unit=ad_unit, ad_creative=ad_creative)
+            return Response({"message": "创意已绑定到广告单元"})
+        except (AdUnit.DoesNotExist, AdCreative.DoesNotExist):
+            return Response({"message": "广告单元或创意未找到"}, status=status.HTTP_404_NOT_FOUND)
+
+    # 为广告单元删除创意
+    @action(detail=False, methods=['post'], permission_classes=[UserLoginPermissions], url_path='remove_creative')
+    def remove_creative(self, request):
+        ad_unit_id = request.data.get('ad_unit_id')
+        creative_id = request.data.get('creative_id')
+
+        if not ad_unit_id or not creative_id:
+            return Response({"message": "广告单元ID和创意ID不能为空"}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            ad_unit = AdUnit.objects.get(unit_id=ad_unit_id)
+            ad_creative = AdCreative.objects.get(creative_id=creative_id)
+
+            # 查找并删除绑定关系
+            ad_unit_creative = AdUnitCreative.objects.filter(ad_unit=ad_unit, ad_creative=ad_creative).first()
+
+            if ad_unit_creative:
+                ad_unit_creative.delete()
+                return Response({"message": "创意已从广告单元中移除"})
+            else:
+                return Response({"message": "广告单元与创意未绑定"}, status=status.HTTP_400_BAD_REQUEST)
+        except (AdUnit.DoesNotExist, AdCreative.DoesNotExist):
+            return Response({"message": "广告单元或创意未找到"}, status=status.HTTP_404_NOT_FOUND)
+
+    # 获取当前广告单元绑定的创意
+    @action(detail=False, methods=['get'], permission_classes=[UserLoginPermissions], url_path='get_creatives')
+    def get_creatives(self, request):
+        ad_unit_id = request.query_params.get('ad_unit_id')  # 从查询参数中获取广告单元ID
+
+        if not ad_unit_id:
+            return Response({"message": "广告单元ID不能为空"}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            ad_unit = AdUnit.objects.get(unit_id=ad_unit_id)
+            # 获取该广告单元绑定的所有创意
+            ad_unit_creatives = AdUnitCreative.objects.filter(ad_unit=ad_unit)
+            # 提取创意对象
+            creatives = [ad_unit_creative.ad_creative for ad_unit_creative in ad_unit_creatives]
+            # 序列化创意对象
+            serializer = AdCreativeSerializer(creatives, many=True)
+            return Response(serializer.data)
+        except AdUnit.DoesNotExist:
+            return Response({"message": "广告单元未找到"}, status=status.HTTP_404_NOT_FOUND)
+
